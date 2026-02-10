@@ -164,23 +164,45 @@ def run_test():
             
             sb.save_screenshot("pella_final_result.png")
             
-            # 提取更新后的时间用于报告
+            # --- 第四阶段: 返回 Pella 验证结果 (强力抓取版) ---
+            logger.info("操作完成，准备回访 Pella 验证最终时间...")
+            sb.sleep(5)
+            sb.uc_open_with_reconnect(target_server_url, 10)
+            sb.sleep(10) # 给足翻译渲染时间
+            
+            # 1. 使用 JS 穿透所有 font 标签强行获取文本
             expiry_info_after = "获取失败"
             try:
-                full_text = sb.get_text('div.max-h-full.overflow-auto')
+                # 获取该区域内所有可见文本的 JS 脚本
+                js_get_all_text = """
+                var element = document.querySelector('div.max-h-full.overflow-auto');
+                return element ? element.innerText : "";
+                """
+                full_text = sb.execute_script(js_get_all_text)
+                logger.info(f"📄 JS 抓取到的原始文本: {full_text}")
+
+                # 2. 更加灵活的正则匹配 (兼容各种字符间隔)
                 d = re.search(r'(\d+)\s*天', full_text)
                 h = re.search(r'(\d+)\s*小时', full_text)
                 m = re.search(r'(\d+)\s*分钟', full_text)
-                parts = [f"{d.group(1)}天 " if d else "", f"{h.group(1)}小时 " if h else "", f"{m.group(1)}分钟" if m else ""]
-                expiry_info_after = "".join(parts).strip()
-            except: pass
+                
+                parts = []
+                if d: parts.append(f"{d.group(1)}天")
+                if h: parts.append(f"{h.group(1)}小时")
+                if m: parts.append(f"{m.group(1)}分钟")
+                
+                if parts:
+                    expiry_info_after = "".join(parts)
+                else:
+                    # 如果还是没匹配到，尝试抓取所有数字并猜测
+                    nums = re.findall(r'\d+', full_text)
+                    if len(nums) >= 2:
+                        expiry_info_after = f"疑似 {nums[0]}小时{nums[1]}分钟"
+            except Exception as e:
+                logger.warning(f"时间提取异常: {e}")
 
-            send_tg_notification("续期成功 ✅", f"初始时间: {expiry_info_before}\n最新时间: {expiry_info_after}", "pella_final_result.png")
-
-        except Exception as e:
-            sb.save_screenshot("error.png")
-            send_tg_notification("保活失败 ❌", f"错误详情: `{str(e)}`", "error.png")
-            raise e
-
+            # 3. 发送最终截图与数据报告
+            sb.save_screenshot("pella_final_result.png")
+            send_tg_notification("续期结果报告 ✅", f"最新到期状态: {expiry_info_after}\n(请检查下方截图确认)", "pella_final_result.png")
 if __name__ == "__main__":
     run_test()

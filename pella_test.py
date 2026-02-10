@@ -22,19 +22,16 @@ def send_tg_notification(status, message, photo_path=None):
     try:
         if photo_path and os.path.exists(photo_path):
             with open(photo_path, 'rb') as f:
-                requests.post(f"https://api.telegram.org/bot{token}/sendPhoto", 
-                              data={'chat_id': chat_id, 'caption': formatted_msg, 'parse_mode': 'Markdown'}, 
-                              files={'photo': f})
+                requests.post(f"https://api.telegram.org/bot{token}/sendPhoto", data={'chat_id': chat_id, 'caption': formatted_msg, 'parse_mode': 'Markdown'}, files={'photo': f})
         else:
-            requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
-                          data={'chat_id': chat_id, 'text': formatted_msg, 'parse_mode': 'Markdown'})
+            requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={'chat_id': chat_id, 'text': formatted_msg, 'parse_mode': 'Markdown'})
     except Exception as e: logger.error(f"TG通知失败: {e}")
 
 # ==========================================
-# 2. Gmail 验证码提取
+# 2. Gmail 验证码提取 (锁死不改)
 # ==========================================
 def get_pella_code(mail_address, app_password):
-    logger.info("📡 连接 Gmail 抓取验证码...")
+    logger.info("📡 正在连接 Gmail 抓取验证码...")
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(mail_address, app_password)
@@ -62,7 +59,7 @@ def get_pella_code(mail_address, app_password):
     except Exception as e: return None
 
 # ==========================================
-# 3. Pella 自动化主程序
+# 3. Pella 自动化流程
 # ==========================================
 def run_test():
     email_addr = os.environ.get("PELLA_EMAIL")
@@ -87,7 +84,7 @@ def run_test():
             sb.type('input[data-input-otp="true"]', auth_code)
             sb.sleep(10)
 
-            # --- 第二阶段: 检查冷却状态 ---
+            # --- 第二阶段: 检查 Pella 状态 ---
             sb.uc_open_with_reconnect(target_server_url, 10)
             sb.sleep(8) 
             expiry_info = "未知"
@@ -107,59 +104,71 @@ def run_test():
                     send_tg_notification("保活报告 (冷却中) 🕒", f"按钮尚在冷却。剩余时间: {expiry_info}", None)
                     return 
 
-            # --- 第三阶段: 穿透 Cloudflare (Kata 模式) ---
+            # --- 第三阶段: 进入续期网站点击第一个 Continue ---
             logger.info(f"跳转至续期网站: {renew_url}")
             sb.uc_open_with_reconnect(renew_url, 10)
-            sb.sleep(6)
+            sb.sleep(5)
             
-            logger.info("尝试穿透 Cloudflare...")
+            # 点击第一个 Continue (id="submit-button", data-ref="first")
+            logger.info("执行第一个 Continue 强力点击...")
+            for i in range(5):
+                try:
+                    if sb.is_element_visible('button#submit-button[data-ref="first"]'):
+                        sb.js_click('button#submit-button[data-ref="first"]')
+                        sb.sleep(3)
+                        if len(sb.driver.window_handles) > 1:
+                            sb.driver.switch_to.window(sb.driver.window_handles[0])
+                        # 如果按钮消失，说明进入了人机挑战阶段
+                        if not sb.is_element_visible('button#submit-button[data-ref="first"]'):
+                            break
+                except: pass
+
+            # --- 第四阶段: 处理 Cloudflare 人机挑战 (Kata 模式) ---
+            logger.info("检测人机验证中...")
+            sb.sleep(5)
             try:
                 cf_iframe = 'iframe[src*="cloudflare"]'
                 if sb.is_element_visible(cf_iframe):
+                    logger.info("发现 CF 验证，尝试 Kata 模式穿透...")
                     sb.switch_to_frame(cf_iframe)
                     sb.click('span.mark') 
                     sb.switch_to_parent_frame()
-                    logger.success("已点击 CF 验证框")
                     sb.sleep(6)
                 else:
                     sb.uc_gui_click_captcha()
             except: pass
 
-            # --- 第四阶段: 强力点击 "I am not a robot" ---
-            # 该按钮特征: id="submit-button" data-ref="captcha"
-            logger.info("开始执行 'I am not a robot' 强力点击...")
-            click_done = False
-            target_btn = 'button#submit-button[data-ref="captcha"]'
+            # --- 第五阶段: 强力点击 "I am not a robot" ---
+            logger.info("开始点击 'I am not a robot' (data-ref='captcha')...")
+            click_final = False
+            captcha_btn = 'button#submit-button[data-ref="captcha"]'
             
-            for i in range(8): # 增加到 8 次尝试，应对多层广告
+            for i in range(8): # 多次尝试应对广告
                 try:
-                    if sb.is_element_visible(target_btn):
-                        logger.info(f"第 {i+1} 次点击按钮...")
-                        sb.js_click(target_btn)
+                    if sb.is_element_visible(captcha_btn):
+                        sb.js_click(captcha_btn)
                         sb.sleep(3)
-                        
-                        # 核心：自动关闭弹出的广告窗口并切回主页面
+                        # 自动清理广告弹窗
                         if len(sb.driver.window_handles) > 1:
-                            curr_handle = sb.driver.current_window_handle
+                            curr = sb.driver.current_window_handle
                             for handle in sb.driver.window_handles:
-                                if handle != curr_handle:
+                                if handle != curr:
                                     sb.driver.switch_to.window(handle)
                                     sb.driver.close()
                             sb.driver.switch_to.window(sb.driver.window_handles[0])
                         
-                        # 检查按钮是否成功消失（代表跳转成功）
-                        if not sb.is_element_visible(target_btn):
-                            click_done = True
+                        if not sb.is_element_visible(captcha_btn):
+                            click_final = True
                             break
                 except: pass
             
             sb.sleep(5)
-            sb.save_screenshot("final_check.png")
+            sb.save_screenshot("final_status.png")
             
-            if click_done:
-                send_tg_notification("续期成功 ✅", f"已穿透人机并完成多次点击。前状态: {expiry_info}", "final_check.png")
+            if click_final:
+                send_tg_notification("续期成功 ✅", f"全流程完成（包含人机穿透）。操作前剩余: {expiry_info}", "final_status.png")
             else:
-                send_tg_notification("流程结束 ⚠️", f"已尝试多次点击，请通过截图确认是否跳转成功。剩余: {expiry_info}", "final_check.png")
+                send_tg_notification("操作反馈 ⚠️", f"已尝试点击最终按钮，请检查截图。剩余: {expiry_info}", "final_status.png")
 
         except Exception as e:
             sb.save_screenshot("error.png")

@@ -1,0 +1,38 @@
+name: Pella Login Test
+
+on:
+  workflow_dispatch: # 手动触发测试
+
+jobs:
+  test-pella:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install seleniumbase loguru requests
+          sbase install chromedriver
+
+      - name: Run Pella Test
+        env:
+          PELLA_EMAIL: ${{ secrets.PELLA_EMAIL }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python pella_test.py
+
+      - name: Upload Screenshots
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: pella-screenshots
+          path: |
+            test_result.png
+            error_screenshot.png

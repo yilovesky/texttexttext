@@ -9,7 +9,7 @@ from seleniumbase import SB
 from loguru import logger
 
 # ==========================================
-# 1. TG 通知功能 (带截图)
+# 1. TG 通知功能
 # ==========================================
 def send_tg_notification(status, message, photo_path=None):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -28,7 +28,7 @@ def send_tg_notification(status, message, photo_path=None):
     except Exception as e: logger.error(f"TG通知失败: {e}")
 
 # ==========================================
-# 2. Gmail 验证码提取
+# 2. Gmail 验证码提取 (锁死不改)
 # ==========================================
 def get_pella_code(mail_address, app_password):
     logger.info("📡 正在连接 Gmail 抓取验证码...")
@@ -37,7 +37,6 @@ def get_pella_code(mail_address, app_password):
         mail.login(mail_address, app_password)
         mail.select("inbox")
         for i in range(10):
-            logger.info(f"🔍 扫描未读邮件 (第 {i+1}/10 次尝试)...")
             status, messages = mail.search(None, '(FROM "Pella" UNSEEN)')
             if status == "OK" and messages[0]:
                 latest_msg_id = messages[0].split()[-1]
@@ -60,18 +59,17 @@ def get_pella_code(mail_address, app_password):
     except Exception as e: return None
 
 # ==========================================
-# 3. Pella 自动化流程 (强制跳转版)
+# 3. Pella 自动化流程 (强力点击版)
 # ==========================================
 def run_test():
     email_addr = os.environ.get("PELLA_EMAIL")
     app_pw = os.environ.get("GMAIL_APP_PASSWORD")
-    # 你指定的服务器详情页
-    target_server_url = "https://www.pella.app/server/eceac5c7c4ea446ba05c3a0287a744c4"
+    target_server_url = "https://www.pella.app/server/c216766d5bbb47fc982167ec08c144b1"
+    renew_url = "https://cuttlinks.com/Q9wFiVeMT6vw"
     
     with SB(uc=True, xvfb=True) as sb:
         try:
-            # 第一步：登录
-            logger.info("第一步: 访问 Pella 登录页")
+            # 第一步：Pella 登录
             sb.uc_open_with_reconnect("https://www.pella.app/login", 10)
             sb.sleep(5)
             sb.uc_gui_click_captcha()
@@ -88,14 +86,11 @@ def run_test():
             sb.type('input[data-input-otp="true"]', auth_code)
             sb.sleep(10)
 
-            # 第三步：【关键改动】直接跳转到指定服务器页
-            logger.info(f"直接跳转至服务器页: {target_server_url}")
+            # 第三步：进入 Pella 详情页确认状态
             sb.uc_open_with_reconnect(target_server_url, 10)
-            sb.sleep(8) # 给翻译和数据加载留出时间
-            sb.save_screenshot("server_page.png")
-
-            # 第四步：提取时间并尝试续期
-            expiry_info = "提取失败"
+            sb.sleep(8) 
+            
+            expiry_info = "未知"
             try:
                 full_text = sb.get_text('div.max-h-full.overflow-auto')
                 d = re.search(r'(\d+)\s*天', full_text)
@@ -103,22 +98,52 @@ def run_test():
                 m = re.search(r'(\d+)\s*分钟', full_text)
                 parts = [f"{d.group(1)}天" if d else "", f"{h.group(1)}小时" if h else "", f"{m.group(1)}分钟" if m else ""]
                 expiry_info = "".join(parts).strip()
-                logger.info(f"🕒 剩余时间: {expiry_info}")
             except: pass
 
-            # 第五步：点击续期按钮
-            target_btn = 'a[href*="tpi.li/FSfV"]'
-            if sb.is_element_visible(target_btn):
-                btn_class = sb.get_attribute(target_btn, "class")
+            # 判断是否冷却
+            target_btn_in_pella = 'a[href*="tpi.li/FSfV"]'
+            is_cooling = False
+            if sb.is_element_visible(target_btn_in_pella):
+                btn_class = sb.get_attribute(target_btn_in_pella, "class")
                 if "opacity-50" in btn_class or "pointer-events-none" in btn_class:
-                    send_tg_notification("保活报告 (冷却中) 🕒", f"已强制进入服务器页。目前剩余: {expiry_info}", "server_page.png")
-                else:
-                    sb.js_click(target_btn)
-                    sb.sleep(5)
-                    sb.save_screenshot("after_click.png")
-                    send_tg_notification("保活成功 ✅", f"已通过直连地址续期。操作前剩余: {expiry_info}", "after_click.png")
+                    is_cooling = True
+
+            if is_cooling:
+                send_tg_notification("保活报告 (冷却中) 🕒", f"按钮尚在冷却。目前剩余: {expiry_info}", None)
+                return # 冷却中直接结束
+
+            # 第四步：新开网页执行强力点击
+            logger.info(f"跳转至续期网站: {renew_url}")
+            sb.uc_open_with_reconnect(renew_url, 10)
+            sb.sleep(5)
+            
+            # 强力点击循环：应对广告干扰
+            logger.info("开始执行 Continue 按钮强力点击...")
+            click_success = False
+            for i in range(5): # 最多尝试 5 次
+                try:
+                    if sb.is_element_visible("#submit-button"):
+                        logger.info(f"第 {i+1} 次尝试点击 Continue...")
+                        sb.js_click("#submit-button")
+                        sb.sleep(3)
+                        # 如果点击后弹出了新窗口，切回原窗口
+                        if len(sb.driver.window_handles) > 1:
+                            sb.driver.switch_to.window(sb.driver.window_handles[0])
+                        
+                        # 检查按钮是否消失，消失则代表点中了跳转成功
+                        if not sb.is_element_visible("#submit-button"):
+                            click_success = True
+                            break
+                except:
+                    pass
+            
+            sb.sleep(5)
+            sb.save_screenshot("after_renew_click.png")
+            
+            if click_success:
+                send_tg_notification("续期成功 ✅", f"已完成 Continue 强力点击。操作前剩余: {expiry_info}", "after_renew_click.png")
             else:
-                send_tg_notification("状态报告 📡", f"已进入指定页面。目前剩余: {expiry_info}", "server_page.png")
+                send_tg_notification("操作异常 ⚠️", f"尝试点击了 Continue 但页面未按预期跳转。剩余: {expiry_info}", "after_renew_click.png")
 
         except Exception as e:
             sb.save_screenshot("error.png")

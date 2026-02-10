@@ -178,7 +178,7 @@ def run_test():
             expiry_after = get_expiry_time_raw(sb)
             sb.save_screenshot("pella_final_result.png")
             
-            send_tg_notification("续期成功 ✅", f"之前看到: {expiry_before}\n现在看到: {expiry_after}", "pella_final_result.png")
+            send_tg_notification("续期成功 ✅", f"续期前: {expiry_before}\n续期后: {expiry_after}", "pella_final_result.png")
 
         except Exception as e:
             sb.save_screenshot("error.png")

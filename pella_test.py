@@ -65,11 +65,10 @@ def run_test():
     email_addr = os.environ.get("PELLA_EMAIL")
     app_pw = os.environ.get("GMAIL_APP_PASSWORD")
     target_server_url = "https://www.pella.app/server/2b3bbeef0eeb452299a11e431c3c2d5b"
-    renew_url = "https://cuty.io/m4w0wJrEmgEC"
     
     with SB(uc=True, xvfb=True) as sb:
         try:
-            # --- 第一阶段: 登录与状态识别 ---
+            # --- 第一阶段: 登录与状态识别 [2026-02-11] ---
             sb.uc_open_with_reconnect("https://www.pella.app/login", 10)
             sb.sleep(5)
             sb.uc_gui_click_captcha()
@@ -84,13 +83,12 @@ def run_test():
             sb.type('input[data-input-otp="true"]', auth_code)
             sb.sleep(10)
 
-            # --- 第二阶段: 检查 Pella 状态 ---
+            # --- 第二阶段: 检查 Pella 状态 [2026-02-11] ---
             sb.uc_open_with_reconnect(target_server_url, 10)
             sb.sleep(10) 
             
             def get_expiry_time_raw(sb_obj):
                 try:
-                    # 改进的 JS：遍历所有 div，只抓取包含 'expiring' 关键字的那个容器
                     js_code = """
                     var divs = document.querySelectorAll('div');
                     for (var d of divs) {
@@ -102,10 +100,7 @@ def run_test():
                     return "未找到时间文本";
                     """
                     raw_text = sb_obj.execute_script(js_code)
-                    # 清洗文本
                     clean_text = " ".join(raw_text.split())
-                    
-                    # 截取核心部分：如果是英文，截取 expiring 之后的内容
                     if "expiring in" in clean_text:
                         return clean_text.split("expiring in")[1].split(".")[0].strip()
                     return clean_text[:60]
@@ -121,10 +116,19 @@ def run_test():
                     send_tg_notification("冷却中 🕒", f"按钮尚在冷却。剩余: {expiry_before}", None)
                     return 
 
-            # --- 第三阶段: 续期网站操作 (保持你验证成功的逻辑) ---
-            logger.info(f"跳转至续期网站: {renew_url}")
-            sb.uc_open_with_reconnect(renew_url, 10)
-            sb.sleep(5)
+            # --- 第三阶段: 续期网站操作 (通过点击按钮进入) [2026-02-11] ---
+            logger.info("正在点击续期按钮以开启跳转...")
+            # 匹配你提供的 Add 24 Hours (cuty) 按钮
+            renew_button_selector = 'a[href*="cuty.io/m4w0wJrEmgEC"]'
+            
+            if sb.is_element_visible(renew_button_selector):
+                sb.js_click(renew_button_selector)
+                sb.sleep(8) # 等待新页面加载
+                # 切换到点击后打开的新标签页
+                if len(sb.driver.window_handles) > 1:
+                    sb.driver.switch_to.window(sb.driver.window_handles[-1])
+            else:
+                raise Exception("页面上未找到续期点击按钮")
             
             for i in range(5):
                 if sb.is_element_visible('button#submit-button[data-ref="first"]'):
@@ -169,7 +173,7 @@ def run_test():
                         sb.driver.switch_to.window(sb.driver.window_handles[0])
                     if not sb.is_element_visible(final_btn): break
 
-            # --- 第四阶段: 返回 Pella 验证结果 ---
+            # --- 第四阶段: 返回 Pella 验证结果 [2026-02-11] ---
             logger.info("操作完成，回访 Pella...")
             sb.sleep(5)
             sb.uc_open_with_reconnect(target_server_url, 10)

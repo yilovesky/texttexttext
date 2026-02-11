@@ -85,41 +85,56 @@ def run_test():
             sb.type('input[data-input-otp="true"]', auth_code)
             sb.sleep(10)
 
-            # --- 第二阶段: 检查 Pella 状态 (使用指定 JS 逻辑) ---
-            logger.info("🔍 [面板监控] 正在检查服务器初始状态...")
+            # --- 第二阶段: 检查 Pella 状态 (终极高精度识别) ---
+            logger.info("🔍 [面板监控] 正在执行多重交叉判定...")
             sb.uc_open_with_reconnect(target_server_url, 10)
             sb.sleep(10) 
             
-            def get_expiry_time_raw(sb_obj):
+            def get_pella_status(sb_obj, r_id):
                 try:
-                    # 严格按照您提供的 JS 提取逻辑
-                    js_code = """
-                    var divs = document.querySelectorAll('div');
-                    for (var d of divs) {
-                        var txt = d.innerText;
-                        if (txt.includes('expiring') && (txt.includes('Day') || txt.includes('Hours') || txt.includes('天'))) {
-                            return txt;
-                        }
-                    }
-                    return "未找到时间文本";
+                    js_code = f"""
+                    (function() {{
+                        var res = {{ time: "未找到时间文本", can_renew: false }};
+                        var divs = document.querySelectorAll('div');
+                        for (var d of divs) {{
+                            var txt = d.innerText;
+                            if (txt.includes('expiring') && (txt.includes('Day') || txt.includes('Hours') || txt.includes('天'))) {{
+                                res.time = txt;
+                            }}
+                        }}
+                        
+                        var btn = document.querySelector('a[href*="' + r_id + '"]');
+                        if (btn) {{
+                            var style = window.getComputedStyle(btn);
+                            // 修正：不再依赖绝对透明度，而是检查是否有 pointer-events 屏蔽和特定的按钮类名
+                            var has_dim_class = btn.classList.contains('opacity-50') || 
+                                              btn.classList.contains('pointer-events-none');
+                            var is_clickable = style.pointerEvents !== 'none' && style.display !== 'none';
+                            
+                            // 只要没有被明确标记为半透明或禁止点击，就判定为高亮
+                            res.can_renew = !has_dim_class && is_clickable;
+                        }}
+                        return res;
+                    }})();
                     """
-                    raw_text = sb_obj.execute_script(js_code)
-                    clean_text = " ".join(raw_text.split())
-                    if "expiring in" in clean_text:
-                        return clean_text.split("expiring in")[1].split(".")[0].strip()
-                    return clean_text[:60]
-                except: return "获取失败"
+                    data = sb_obj.execute_script(js_code)
+                    raw_time = data['time']
+                    clean_time = " ".join(raw_time.split())
+                    if "expiring in" in clean_time:
+                        display_time = clean_time.split("expiring in")[1].split(".")[0].strip()
+                    else:
+                        display_time = clean_time[:60]
+                    return display_time, data['can_renew']
+                except: return "获取失败", False
 
-            expiry_before = get_expiry_time_raw(sb)
-            logger.info(f"🕒 [面板监控] 续期前剩余时间: {expiry_before}")
+            expiry_before, is_highlighted = get_pella_status(sb, renew_id)
+            logger.info(f"🕒 [面板监控] 续期前剩余时间: {expiry_before} | 最终判定状态: {is_highlighted}")
 
-            target_btn_in_pella = 'a[href*="tpi.li/FSfV"]'
-            if sb.is_element_visible(target_btn_in_pella):
-                btn_class = sb.get_attribute(target_btn_in_pella, "class")
-                if "opacity-50" in btn_class or "pointer-events-none" in btn_class:
-                    logger.warning("🕒 [面板监控] 按钮处于冷却中，任务结束。")
-                    send_tg_notification("保活报告 (冷却中) 🕒", f"按钮尚在冷却。剩余时间: {expiry_before}", None)
-                    return 
+            # 逻辑闭环：如果没高亮，直接安全退出，不打印成功标记
+            if not is_highlighted:
+                logger.warning("🕒 [面板监控] 判定按钮不可用 (冷却期)，脚本终止。")
+                send_tg_notification("保活报告 (冷却中) 🕒", f"检测到按钮未激活，本次不更新周期时间。\n剩余时间: {expiry_before}", None)
+                sys.exit(0) 
 
             # --- 第三阶段: 进入续期网站点击第一个 Continue ---
             logger.info(f"🚀 [面板监控] 跳转至续期网站: {renew_url}")
